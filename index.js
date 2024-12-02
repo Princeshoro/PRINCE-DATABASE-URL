@@ -45,20 +45,18 @@ async function cleanDatabase(filePath) {
     const fileData = await fs.readFile(filePath, 'utf8');
     const data = JSON.parse(fileData);
 
+    // Clean data if size exceeds MAX_FILE_SIZE / 2
     if (Array.isArray(data)) {
-      // Remove oldest entries for array data
       while (JSON.stringify(data).length > MAX_FILE_SIZE / 2) {
         data.shift();
       }
     } else if (typeof data === 'object') {
-      // Remove oldest keys for object data
       const keys = Object.keys(data);
       while (JSON.stringify(data).length > MAX_FILE_SIZE / 2) {
         delete data[keys.shift()];
       }
     }
 
-    // Write cleaned data back to the file
     await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
     console.log(`${filePath} cleaned to maintain size limit.`);
   } catch (error) {
@@ -76,13 +74,12 @@ async function getCurrentDatabaseFile() {
         return filePath;
       }
     } catch {
-      // File doesn't exist; create it
       await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
       return filePath;
     }
   }
 
-  // If all files are full, return the first file (and clean it)
+  // If all files are full, clean the first file and return it
   console.log('All database files exceeded size. Cleaning the first file...');
   const firstFilePath = path.join(dbFolder, dbFiles[0]);
   await cleanDatabase(firstFilePath);
@@ -104,7 +101,6 @@ app.get('/', async (req, res) => {
         const data = JSON.parse(fileData);
         allData.push(...(Array.isArray(data) ? data : [data]));
       } catch {
-        // If the file doesn't exist or is empty, skip it
         console.log(`Skipping empty or non-existent file: ${dbFile}`);
       }
     }
@@ -134,7 +130,6 @@ app.post('/', async (req, res) => {
   try {
     const filePath = await getCurrentDatabaseFile();
 
-    // Read existing data
     let existingData = [];
     try {
       const fileData = await fs.readFile(filePath, 'utf8');
