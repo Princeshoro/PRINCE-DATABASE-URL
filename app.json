@@ -1,0 +1,21 @@
+{
+  "name": "Prince Database",
+  "description": "A database URL handler project for deployment.",
+  "repository": "https://github.com/DASTAGHIR/PRINCE-DATABASE-URL",
+  "keywords": ["node", "express", "database"],
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "env": {
+    "NODE_ENV": {
+      "description": "Set the environment to production",
+      "value": "production"
+    },
+    "PORT": {
+      "description": "Port for the app to run on",
+      "value": "3000"
+    }
+  }
+}
