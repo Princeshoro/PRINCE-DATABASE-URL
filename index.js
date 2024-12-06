@@ -1,45 +1,114 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { EventEmitter } from 'events';
 
 const dbFolder = './files';
 const dbFiles = ['db.json', 'db1.json', 'db2.json', 'db3.json', 'db4.json', 'db5.json'];
+const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB file size limit for each file
+
+class Stater extends EventEmitter {
+  constructor(props) {
+    super(props);
+    this.state = true;
+  }
+
+  setState(newState) {
+    this.state = newState || false;
+    this.emit('set', newState);
+  }
+
+  waitForTrue() {
+    return new Promise((resolve) => {
+      const check = () => {
+        if (this.state) {
+          this.off('set', check);
+          resolve();
+        }
+      };
+      this.on('set', check);
+      check();
+    });
+  }
+}
+
+const isOpen = new Stater();
+
 const app = express();
 
-app.use(express.json()); // Middleware to parse JSON requests
+// Middleware to parse JSON requests
+app.use(express.json());
 
-// Function to read all database files and prepare data for vertical output
-async function readDatabaseFiles() {
-  const verticalData = {};
+// Function to clean a database file if it exceeds the size limit
+async function cleanDatabase(filePath) {
+  try {
+    const fileData = await fs.readFile(filePath, 'utf8');
+    const data = JSON.parse(fileData);
+
+    // Clean data if size exceeds MAX_FILE_SIZE / 2
+    if (Array.isArray(data)) {
+      while (JSON.stringify(data).length > MAX_FILE_SIZE / 2) {
+        data.shift();
+      }
+    } else if (typeof data === 'object') {
+      const keys = Object.keys(data);
+      while (JSON.stringify(data).length > MAX_FILE_SIZE / 2) {
+        delete data[keys.shift()];
+      }
+    }
+
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+    console.log(`🧹 ${filePath} cleaned to maintain size limit.`);
+  } catch (error) {
+    console.error(`❌ Error cleaning ${filePath}:`, error);
+  }
+}
+
+// Function to get the current database file
+async function getCurrentDatabaseFile() {
   for (const dbFile of dbFiles) {
     const filePath = path.join(dbFolder, dbFile);
     try {
-      const fileData = await fs.readFile(filePath, 'utf8');
-      const parsedData = JSON.parse(fileData);
-      verticalData[dbFile] = Array.isArray(parsedData) ? parsedData : [parsedData];
+      const stats = await fs.stat(filePath);
+      if (stats.size < MAX_FILE_SIZE) {
+        return filePath;
+      }
     } catch {
-      // If the file is empty or non-existent, initialize it with an empty array
       await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
-      verticalData[dbFile] = [];
+      return filePath;
     }
   }
-  return verticalData;
+
+  console.log('⚠️ All database files exceeded size. Cleaning the first file...');
+  const firstFilePath = path.join(dbFolder, dbFiles[0]);
+  await cleanDatabase(firstFilePath);
+  return firstFilePath;
 }
 
-// GET route to fetch database content in vertical format with stylish emojis
+// GET route to fetch data from all database files
 app.get('/', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  await isOpen.waitForTrue();
+  isOpen.setState(false);
+
   try {
-    const verticalData = await readDatabaseFiles();
-    const response = {};
-    for (const [fileName, data] of Object.entries(verticalData)) {
-      response[`📁 ${fileName}`] = data.length
-        ? data.map((entry, index) => `✨ ${index + 1}: ${JSON.stringify(entry, null, 2)}`)
-        : ['🚫 No data found'];
+    const allData = [];
+    for (const dbFile of dbFiles) {
+      const filePath = path.join(dbFolder, dbFile);
+      try {
+        const fileData = await fs.readFile(filePath, 'utf8');
+        const data = fileData ? JSON.parse(fileData) : [];
+        allData.push(...(Array.isArray(data) ? data : [data]));
+      } catch (error) {
+        console.error(`⚠️ Skipping invalid or empty file: ${dbFile}`);
+      }
     }
-    res.json(response);
+    res.status(200).json({ message: '📂 Data fetched successfully!', data: allData });
   } catch (error) {
-    console.error('Error reading database files:', error);
+    console.error('❌ Error fetching data:', error);
     res.status(500).json({ error: 'Internal Server Error 😢' });
+  } finally {
+    isOpen.setState(true);
   }
 });
 
@@ -52,29 +121,64 @@ app.post('/', async (req, res) => {
     });
   }
 
+  await isOpen.waitForTrue();
+  isOpen.setState(false);
+
   try {
-    const filePath = path.join(dbFolder, dbFiles[0]); // Simplified to use the first file for demonstration
-    const fileData = await fs.readFile(filePath, 'utf8');
-    const parsedData = JSON.parse(fileData);
+    const filePath = await getCurrentDatabaseFile();
+
+    let existingData = [];
+    try {
+      const fileData = await fs.readFile(filePath, 'utf8');
+      existingData = fileData ? JSON.parse(fileData) : [];
+    } catch (error) {
+      if (error.name === 'SyntaxError') {
+        console.error(`❌ Invalid JSON in file: ${filePath}`);
+        existingData = [];
+      } else {
+        throw error;
+      }
+    }
 
     // Append new data
-    if (Array.isArray(parsedData)) {
-      parsedData.push(req.body);
+    if (Array.isArray(existingData)) {
+      existingData.push(req.body);
     } else {
-      parsedData = [parsedData, req.body];
+      existingData = [existingData, req.body];
     }
 
     // Write updated data back to the file
-    await fs.writeFile(filePath, JSON.stringify(parsedData, null, 2), 'utf8');
-    res.status(200).json({ message: 'Data added successfully ✅' });
+    await fs.writeFile(filePath, JSON.stringify(existingData, null, 2), 'utf8');
+    res.status(200).json({ message: '✅ Data added successfully!', data: req.body });
   } catch (error) {
-    console.error('Error writing to database:', error);
+    console.error('❌ Error writing to database:', error);
     res.status(500).json({ error: 'Internal Server Error 😢' });
+  } finally {
+    isOpen.setState(true);
   }
 });
 
-// Initialize server
+// Ensure database folder exists
+async function initializeDatabase() {
+  try {
+    await fs.mkdir(dbFolder, { recursive: true });
+    for (const dbFile of dbFiles) {
+      const filePath = path.join(dbFolder, dbFile);
+      try {
+        await fs.access(filePath);
+      } catch {
+        await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
+        console.log(`📝 Initialized file: ${dbFile}`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error initializing database:', error);
+  }
+}
+
+// Start the server
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`🚀 Server is running on port ${port} 🌟`);
+app.listen(port, async () => {
+  console.log(`🚀 Server is running on port ${port}`);
+  await initializeDatabase();
 });
