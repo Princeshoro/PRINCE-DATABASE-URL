@@ -1,5 +1,5 @@
 import express from 'express';
-import fs from 'fs/promises'; 
+import fs from 'fs/promises';
 import path from 'path';
 import { EventEmitter } from 'events';
 
@@ -58,9 +58,9 @@ async function cleanDatabase(filePath) {
     }
 
     await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
-    console.log(`${filePath} cleaned to maintain size limit.`);
+    console.log(`🧹 ${filePath} cleaned to maintain size limit.`);
   } catch (error) {
-    console.error(`Error cleaning ${filePath}:`, error);
+    console.error(`❌ Error cleaning ${filePath}:`, error);
   }
 }
 
@@ -79,11 +79,26 @@ async function getCurrentDatabaseFile() {
     }
   }
 
-  // If all files are full, clean the first file and return it
-  console.log('All database files exceeded size. Cleaning the first file...');
+  console.log('⚠️ All database files exceeded size. Cleaning the first file...');
   const firstFilePath = path.join(dbFolder, dbFiles[0]);
   await cleanDatabase(firstFilePath);
   return firstFilePath;
+}
+
+// Function to safely read JSON from a file
+async function readJsonFile(filePath) {
+  try {
+    const fileData = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(fileData);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.error(`❌ Invalid JSON in file: ${filePath}. Resetting the file.`);
+      // Reset to an empty array if the JSON is invalid
+      await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
+      return [];
+    }
+    throw error; // Re-throw other errors
+  }
 }
 
 // GET route to fetch data from all database files
@@ -93,26 +108,20 @@ app.get('/', async (req, res) => {
   isOpen.setState(false);
 
   try {
-    const allData = {};
+    const allData = [];
     for (const dbFile of dbFiles) {
       const filePath = path.join(dbFolder, dbFile);
       try {
-        const fileData = await fs.readFile(filePath, 'utf8');
-        const data = JSON.parse(fileData);
-        // Assuming that the database contains user-specific data and you want to merge them into a "users" object
-        allData.users = { ...allData.users, ...data };
-      } catch {
-        console.log(`Skipping empty or non-existent file: ${dbFile}`);
+        const data = await readJsonFile(filePath);
+        allData.push(...(Array.isArray(data) ? data : [data]));
+      } catch (error) {
+        console.error(`⚠️ Skipping invalid or empty file: ${dbFile}`);
       }
     }
-
-    // Return a pretty-printed JSON response
-    res.send(JSON.stringify(allData, null, 2)); // Indentation level set to 2 spaces for readability
+    res.status(200).json({ message: '📂 Data fetched successfully!', data: allData });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      error: 'Internal Server Error',
-    });
+    console.error('❌ Error fetching data:', error);
+    res.status(500).json({ error: 'Internal Server Error 😢' });
   } finally {
     isOpen.setState(true);
   }
@@ -121,9 +130,9 @@ app.get('/', async (req, res) => {
 // POST route to add data to the current database file
 app.post('/', async (req, res) => {
   if (req.headers['content-type'] !== 'application/json') {
-    return res.status(401).json({
-      error: 'Invalid Type',
-      message: 'Content-Type must be application/json',
+    return res.status(400).json({
+      error: 'Invalid Type ❌',
+      message: 'Content-Type must be application/json 🛠️',
     });
   }
 
@@ -133,33 +142,47 @@ app.post('/', async (req, res) => {
   try {
     const filePath = await getCurrentDatabaseFile();
 
-    let existingData = {};
-    try {
-      const fileData = await fs.readFile(filePath, 'utf8');
-      existingData = JSON.parse(fileData);
-    } catch {
-      existingData = {};
-    }
+    let existingData = await readJsonFile(filePath);
 
-    // Append new data (assuming it's structured like the example you gave)
-    existingData.users = existingData.users || {};
-    existingData.users[req.body.id] = req.body.data;
+    // Append new data
+    if (Array.isArray(existingData)) {
+      existingData.push(req.body);
+    } else {
+      existingData = [existingData, req.body];
+    }
 
     // Write updated data back to the file
     await fs.writeFile(filePath, JSON.stringify(existingData, null, 2), 'utf8');
-    res.sendStatus(200);
+    res.status(200).json({ message: '✅ Data added successfully!', data: req.body });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      error: 'Internal Server Error',
-    });
+    console.error('❌ Error writing to database:', error);
+    res.status(500).json({ error: 'Internal Server Error 😢' });
   } finally {
     isOpen.setState(true);
   }
 });
 
-const port = process.env.PORT || 3000;
+// Ensure database folder exists
+async function initializeDatabase() {
+  try {
+    await fs.mkdir(dbFolder, { recursive: true });
+    for (const dbFile of dbFiles) {
+      const filePath = path.join(dbFolder, dbFile);
+      try {
+        await fs.access(filePath);
+      } catch {
+        await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
+        console.log(`📝 Initialized file: ${dbFile}`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error initializing database:', error);
+  }
+}
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+// Start the server
+const port = process.env.PORT || 3000;
+app.listen(port, async () => {
+  console.log(`🚀 Server is running on port ${port}`);
+  await initializeDatabase();
 });
