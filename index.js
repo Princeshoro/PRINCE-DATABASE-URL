@@ -74,7 +74,7 @@ async function getCurrentDatabaseFile() {
         return filePath;
       }
     } catch {
-      await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
+      await fs.writeFile(filePath, JSON.stringify({}, null, 2), 'utf8'); // Create empty JSON object if file doesn't exist
       return filePath;
     }
   }
@@ -92,18 +92,18 @@ app.get('/', async (req, res) => {
   isOpen.setState(false);
 
   try {
-    const allData = [];
+    const allData = {};
     for (const dbFile of dbFiles) {
       const filePath = path.join(dbFolder, dbFile);
       try {
         const fileData = await fs.readFile(filePath, 'utf8');
-        const data = fileData ? JSON.parse(fileData) : [];
-        allData.push(...(Array.isArray(data) ? data : [data]));
+        const data = fileData ? JSON.parse(fileData) : {};
+        Object.assign(allData, data);
       } catch (error) {
         console.error(`⚠️ Skipping invalid or empty file: ${dbFile}`);
       }
     }
-    res.status(200).json({ message: '📂 Data fetched successfully!', data: allData });
+    res.status(200).json({ users: allData, message: '📂 Data fetched successfully!' });
   } catch (error) {
     console.error('❌ Error fetching data:', error);
     res.status(500).json({ error: 'Internal Server Error 😢' });
@@ -127,24 +127,25 @@ app.post('/', async (req, res) => {
   try {
     const filePath = await getCurrentDatabaseFile();
 
-    let existingData = [];
+    let existingData = {};
     try {
       const fileData = await fs.readFile(filePath, 'utf8');
-      existingData = fileData ? JSON.parse(fileData) : [];
+      existingData = fileData ? JSON.parse(fileData) : {};
     } catch (error) {
       if (error.name === 'SyntaxError') {
         console.error(`❌ Invalid JSON in file: ${filePath}`);
-        existingData = [];
+        existingData = {};
       } else {
         throw error;
       }
     }
 
-    // Append new data
-    if (Array.isArray(existingData)) {
-      existingData.push(req.body);
+    // Merge new data
+    const userId = req.body.id;
+    if (userId) {
+      existingData[userId] = req.body;
     } else {
-      existingData = [existingData, req.body];
+      return res.status(400).json({ error: 'User ID is required in the payload.' });
     }
 
     // Write updated data back to the file
@@ -167,7 +168,7 @@ async function initializeDatabase() {
       try {
         await fs.access(filePath);
       } catch {
-        await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
+        await fs.writeFile(filePath, JSON.stringify({}, null, 2), 'utf8');
         console.log(`📝 Initialized file: ${dbFile}`);
       }
     }
