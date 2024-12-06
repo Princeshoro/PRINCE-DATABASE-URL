@@ -4,93 +4,77 @@ import path from 'path';
 
 const dbFolder = './files';
 const dbFiles = ['db.json', 'db1.json', 'db2.json', 'db3.json', 'db4.json', 'db5.json'];
-const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB limit per file
-const MEMORY_CACHE = {}; // In-memory cache for database files
-
 const app = express();
-app.use(express.json());
 
-// Initialize database files in memory
-async function initializeCache() {
+app.use(express.json()); // Middleware to parse JSON requests
+
+// Function to read all database files and prepare data for vertical output
+async function readDatabaseFiles() {
+  const verticalData = {};
   for (const dbFile of dbFiles) {
     const filePath = path.join(dbFolder, dbFile);
     try {
       const fileData = await fs.readFile(filePath, 'utf8');
-      MEMORY_CACHE[dbFile] = JSON.parse(fileData);
+      const parsedData = JSON.parse(fileData);
+      verticalData[dbFile] = Array.isArray(parsedData) ? parsedData : [parsedData];
     } catch {
-      MEMORY_CACHE[dbFile] = []; // Initialize as empty array if file doesn't exist
+      // If the file is empty or non-existent, initialize it with an empty array
       await fs.writeFile(filePath, JSON.stringify([], null, 2), 'utf8');
+      verticalData[dbFile] = [];
     }
   }
+  return verticalData;
 }
 
-// Save cache to files periodically
-async function saveCacheToFiles() {
-  for (const dbFile of dbFiles) {
-    const filePath = path.join(dbFolder, dbFile);
-    if (MEMORY_CACHE[dbFile]) {
-      await fs.writeFile(filePath, JSON.stringify(MEMORY_CACHE[dbFile], null, 2), 'utf8');
-    }
-  }
-}
-
-// Clean the first database file if all files exceed size limit
-async function cleanDatabase() {
-  const firstFile = dbFiles[0];
-  const filePath = path.join(dbFolder, firstFile);
-
-  let data = MEMORY_CACHE[firstFile];
-  while (JSON.stringify(data).length > MAX_FILE_SIZE / 2) {
-    data.shift(); // Remove oldest entries
-  }
-
-  MEMORY_CACHE[firstFile] = data;
-  console.log(`${firstFile} cleaned to maintain size limit.`);
-}
-
-// GET route to fetch all data in horizontal format
+// GET route to fetch database content in vertical format with stylish emojis
 app.get('/', async (req, res) => {
   try {
-    const allData = [];
-    for (const dbFile of dbFiles) {
-      allData.push(...(MEMORY_CACHE[dbFile] || []));
+    const verticalData = await readDatabaseFiles();
+    const response = {};
+    for (const [fileName, data] of Object.entries(verticalData)) {
+      response[`📁 ${fileName}`] = data.length
+        ? data.map((entry, index) => `✨ ${index + 1}: ${JSON.stringify(entry, null, 2)}`)
+        : ['🚫 No data found'];
     }
-    res.json(allData);
+    res.json(response);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error reading database files:', error);
+    res.status(500).json({ error: 'Internal Server Error 😢' });
   }
 });
 
-// POST route to add data
+// POST route to add data to the current database file
 app.post('/', async (req, res) => {
-  try {
-    const newData = req.body;
+  if (req.headers['content-type'] !== 'application/json') {
+    return res.status(400).json({
+      error: 'Invalid Type ❌',
+      message: 'Content-Type must be application/json 🛠️',
+    });
+  }
 
-    // Find the first available file to store the new data
-    for (const dbFile of dbFiles) {
-      const currentData = MEMORY_CACHE[dbFile] || [];
-      if (JSON.stringify(currentData).length < MAX_FILE_SIZE) {
-        currentData.push(newData);
-        MEMORY_CACHE[dbFile] = currentData;
-        return res.sendStatus(200);
-      }
+  try {
+    const filePath = path.join(dbFolder, dbFiles[0]); // Simplified to use the first file for demonstration
+    const fileData = await fs.readFile(filePath, 'utf8');
+    const parsedData = JSON.parse(fileData);
+
+    // Append new data
+    if (Array.isArray(parsedData)) {
+      parsedData.push(req.body);
+    } else {
+      parsedData = [parsedData, req.body];
     }
 
-    // If all files are full, clean the first file and retry
-    await cleanDatabase();
-    MEMORY_CACHE[dbFiles[0]].push(newData);
-    res.sendStatus(200);
+    // Write updated data back to the file
+    await fs.writeFile(filePath, JSON.stringify(parsedData, null, 2), 'utf8');
+    res.status(200).json({ message: 'Data added successfully ✅' });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error writing to database:', error);
+    res.status(500).json({ error: 'Internal Server Error 😢' });
   }
 });
 
-// Start server and initialize cache
+// Initialize server
 const port = process.env.PORT || 3000;
-app.listen(port, async () => {
-  console.log(`Server running on port ${port}`);
-  await initializeCache();
-  setInterval(saveCacheToFiles, 5000); // Save cache to files every 5 seconds
+app.listen(port, () => {
+  console.log(`🚀 Server is running on port ${port} 🌟`);
 });
